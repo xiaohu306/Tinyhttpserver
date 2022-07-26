@@ -499,8 +499,8 @@ int main(void)
                 client_sock = accept(server_sock, (sockaddr*)&client_name, &client_name_len);
                 setsockopt(client_sock, SOL_SOCKET, SO_REUSEADDR, &fla, sizeof(fla));
                 if(client_sock < 0)
-                {   //sleep(0.01);
-                    //perror("client_sock < 0!");
+                {   sleep(0.01);
+                    perror("client_sock < 0!");
 		            continue;
                 }
                 //char* str = inet_ntoa(client_name.sin_addr);
