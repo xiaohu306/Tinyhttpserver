@@ -11,4 +11,4 @@ make
 
 webbench -c 2500 -t 10 http://127.0.0.1:8080/
 
- ![image](https://github.com/xiaohu306/Tinyhttpserver/httpdocs/test.png)
+ ![image](./httpdocs/test.png)
