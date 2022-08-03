@@ -23,7 +23,7 @@ using namespace std;
 #define ISspace(x) isspace((int)(x))
 #define SERVER_STRING "Server: JZK_epoll http/1.1\r\n"
 int epfd;
-
+struct stat filestat;
 //每次收到请求，创建一个线程来处理接受到的请求，把client_sock转成地址作为参数传入pthread_create
 void *accept_request(int client);
 
@@ -57,6 +57,8 @@ int startup(u_short *);
 
 //如果不是Get或者Post，就报方法没有实现
 void unimplemented(int);
+
+int simple_file(int client);
 
 void *accept_request(int client)
 {  
@@ -142,7 +144,9 @@ void *accept_request(int client)
             not_found(client);
             removefd(epfd,client);
             return NULL;
-        }    
+        }
+        //flag = simple_file(client);    
+        //flag = serve_file(client);
         flag = serve_file(client, path);
     }
     else
@@ -157,7 +161,34 @@ void *accept_request(int client)
 }
 
 
+int simple_file(int client)
+{   
+    int numchars = 1;
+    char buf[1024];
+    buf[0] = 'A';
+    buf[1] = '\0';
+    while ((numchars > 0) && strcmp("\n", buf))
+    {   
+        numchars = get_line(client, buf, sizeof(buf));
+        if(numchars==-1){
+            return 0;
+        }
+    }
+    //cout<<"???\n";
+    strcpy(buf, "HTTP/1.0 200 OK\r\n");
+    send(client, buf, strlen(buf), 0);
+    strcpy(buf, SERVER_STRING);
+    send(client, buf, strlen(buf), 0);
+    sprintf(buf, "Content-type: text/html\r\n");
+    send(client, buf, strlen(buf), 0);
+    sprintf(buf, "Content-Length: 7\r\n\r\n");
+    send(client, buf, strlen(buf), 0);
+    sprintf(buf, "Hello\r\n");
+    send(client, buf, strlen(buf), 0);
+    //cout<<"....\n";
+    return 1;
 
+}
 void bad_request(int client)
 {
     char buf[1024];
@@ -172,21 +203,6 @@ void bad_request(int client)
     send(client, buf, sizeof(buf), 0);
     sprintf(buf, "such as a POST without a Content-Length.\r\n");
     send(client, buf, sizeof(buf), 0);
-}
-
-
-void cat(int client, FILE *resource)
-{
-    //发送文件的内容
-    char buf[1024];
-    //从文件文件描述符中读取指定内容
-    fgets(buf, sizeof(buf), resource);
-    while (!feof(resource))
-    {
-        int q=send(client, buf, strlen(buf), 0);
-        //if(q<=0)printf("1\n");
-        fgets(buf, sizeof(buf), resource);
-    }
 }
 
 void error_die(const char *sc)
@@ -270,7 +286,7 @@ int run_post(int client){
     else hobby[--index]='\0';
     sprintf(buf, "HTTP/1.0 200 OK\r\n");
     send(client, buf, strlen(buf), 0);
-    sprintf(buf, "Content-type:text/html\r\n\r\n");
+    sprintf(buf, "Content-type: text/html\r\n\r\n");
     send(client, buf, strlen(buf), 0);
     sprintf(buf, "<html><head><meta charset=\"UTF-8\"><title>post_data</title></head>\r\n");
     send(client, buf, strlen(buf), 0);
@@ -364,8 +380,6 @@ void not_found(int client)
     send(client, buf, strlen(buf), 0);
     sprintf(buf, "Content-Type: text/html\r\n");
     send(client, buf, strlen(buf), 0);
-    sprintf(buf, "Content-Length: \r\n");
-    send(client, buf, strlen(buf), 0);
     sprintf(buf, "\r\n");
     send(client, buf, strlen(buf), 0);
     sprintf(buf, "<HTML><TITLE>TTTT</TITLE>\r\n");
@@ -381,9 +395,8 @@ void not_found(int client)
 }
 
 //如果不是CGI文件，也就是静态文件，直接读取文件返回给请求的http客户端
-int serve_file(int client, const char *filename)
+int serve_file(int client, const char *filename = "./httpdocs/post.html")
 {   
-    FILE *resource = NULL;
     int numchars = 1;
     char buf[1024];
     buf[0] = 'A';
@@ -395,25 +408,21 @@ int serve_file(int client, const char *filename)
             return 0;
         }
     }
-    //打开文件
-    resource = fopen(filename, "r");
-    if (resource == NULL)
+    stat(filename, &filestat);
+    int fd=open(filename,O_RDWR);
+    void *ptr=mmap(NULL,filestat.st_size,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
+    close(fd);
+    if(ptr==MAP_FAILED)//如果出现错误，类似于其他函数返回-1
     {
-        not_found(client);
+        perror("mmap");
+        unimplemented(client);
+        return 0;
     }
-    else
-    {	
-		ifstream is;  
-  		is.open (filename, ios::binary );  
-        is.seekg (0, ios::end);  
-  		int length = is.tellg();  
-  		is.seekg (0, ios::beg);   
-        //打开成功后，将这个文件的基本信息封装成 response 的头部(header)并返回
-        headers(client, length);
-        //接着把这个文件的内容读出来作为 response 的 body 发送到客户端
-        cat(client, resource);
-    }
-    fclose(resource);//关闭文件句柄
+    headers(client, filestat.st_size);
+    strcpy(buf,(char *)ptr);
+    send(client, buf, strlen(buf), 0);
+    munmap(ptr,filestat.st_size);
+    ptr=nullptr;
     return 1;
 }
 
@@ -480,29 +489,30 @@ int main(void)
     struct sockaddr_in client_name;
     socklen_t client_name_len = sizeof(client_name);
     //创建线程池
-    NewThreadPool pool(10);
+    NewThreadPool pool(8);
     server_sock = startup(&port);
     int nfds,fla=1;
     //生成用于处理accept的epoll专用的文件描述符
     epfd = epoll_create(5);
-    struct epoll_event ev, events[10000];
+    struct epoll_event ev, events[5000];
     addfd(epfd, server_sock, false, 0); //LT
     printf("httpd running on port: %d\n", port);
     while(true)
     {
-        nfds = epoll_wait(epfd, events, 10000, -1);
+        nfds = epoll_wait(epfd, events, 5000, -1);
         for(int i = 0; i < nfds; i++)
         {
             //如果新检测到一个socket用户连接到了绑定的socket端口，建立新的连接
             if(events[i].data.fd == server_sock)
             {
                 client_sock = accept(server_sock, (sockaddr*)&client_name, &client_name_len);
-                setsockopt(client_sock, SOL_SOCKET, SO_REUSEADDR, &fla, sizeof(fla));
+                //cout<<client_sock<<endl;
                 if(client_sock < 0)
-                {   sleep(0.01);
-                    perror("client_sock < 0!");
+                {   sleep(0.0001);
+                    //perror("client_sock < 0!");
 		            continue;
                 }
+                setsockopt(client_sock, SOL_SOCKET, SO_REUSEADDR, &fla, sizeof(fla));
                 //char* str = inet_ntoa(client_name.sin_addr);
                 //printf("accept a connnection from %s!\n", str);
 		        addfd(epfd, client_sock, true, 1);//ET
