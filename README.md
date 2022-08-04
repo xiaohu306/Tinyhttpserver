@@ -12,3 +12,4 @@ make
 webbench -c 2500 -t 10 http://127.0.0.1:8080/
 
  ![image](./httpdocs/test.png)
+现已支持10000客户端
